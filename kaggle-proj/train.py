@@ -28,9 +28,9 @@ MODEL_SAVE_PATH = "S:\\models\\model.pt"
 NUM_CLASSES = 20
 VALID_PCT = 0.20
 # network hyperparams
-LEARNING_RATE = 0.00062
-BATCH_SIZE = 75
-NUM_EPOCHS = 1000
+LEARNING_RATE = 0.00035
+BATCH_SIZE = 18
+NUM_EPOCHS = 5000
 
 
 # ======================================================
@@ -57,22 +57,17 @@ class Net(nn.Module):
     def __init__(self, input_size):
         super(Net, self).__init__()
 
-        self.fc1 = nn.Linear(input_size, 550)
-        self.fc2 = nn.Linear(550, 550)
-        # self.fc3 = nn.Linear(200, 200)
-        self.fc4 = nn.Linear(550, NUM_CLASSES)
+        self.fc1 = nn.Linear(input_size, 620)
+        self.fc2 = nn.Linear(620, 620)
+        self.fc_final = nn.Linear(620, NUM_CLASSES)
 
-        self.dropout1 = nn.Dropout(p=0.5)
-        self.dropout2 = nn.Dropout(p=0.5)
-        # self.dropout3 = nn.Dropout(p=0.3)
-        self.dropout4 = nn.Dropout(p=0.0)
+        self.activation = F.relu
+        self.dropout = nn.Dropout(p=0.65)
 
     def forward(self, x):
-        # add hidden layer, with relu activation function
-        x = self.dropout1(torch.relu(self.fc1(x)))
-        x = self.dropout2(torch.relu(self.fc2(x)))
-        # x = self.dropout3(torch.relu(self.fc3(x)))
-        x = self.dropout4(self.fc4(x))
+        x = self.dropout(self.activation(self.fc1(x)))
+        x = self.dropout(self.activation(self.fc2(x)))
+        x = self.fc_final(x)
 
         return x
 
@@ -80,6 +75,13 @@ class Net(nn.Module):
 # ======================================================
 # --- FUNCTIONS ----------------------------------------
 # ======================================================
+# normalizations functions
+def norm_standardize(array):
+    return array.sub(array.mean()).div(array.std())
+
+def norm_l2(array):
+    return array.div(array.norm(p=2))
+
 def coords_450(reader):
     coords = [float(coord) for coords in reader for coord in coords]
     # add/remove coords if length is not valid
@@ -92,8 +94,7 @@ def coords_450(reader):
         else:
             coords = coords[:error]
     # normalize coords
-    coords = torch.tensor(coords, dtype=torch.float)
-    coords.div_(coords.norm(p=2))
+    coords = norm_l2(torch.tensor(coords, dtype=torch.float, device=CUDA_0))
 
     return coords
 
@@ -141,7 +142,7 @@ if __name__ == "__main__":
     with open(TRAIN_LABELS_FILE, mode='r') as labels_file:
         csv_reader = csv.reader(labels_file)
         next(csv_reader)  # skip the header
-        labels = torch.tensor([int(label) - 1 for _, label in csv_reader], dtype=torch.long)
+        labels = torch.tensor([int(label) - 1 for _, label in csv_reader], dtype=torch.long, device=CUDA_0)
 
     # put the loaded data into a dataset
     train_data = UserCoordsDataset(inputs, labels)
