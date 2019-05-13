@@ -27,10 +27,13 @@ MODEL_SAVE_PATH = "S:\\models\\model.pt"
 # data
 NUM_CLASSES = 20
 VALID_PCT = 0.20
+COLUMN_LEN = 150
+ROW_LEN = 3
 # network hyperparams
-LEARNING_RATE = 0.00035
-BATCH_SIZE = 18
-NUM_EPOCHS = 5000
+LEARNING_RATE = 0.0003
+WEIGHT_DECAY = 0.0001
+BATCH_SIZE = 50
+NUM_EPOCHS = 10000
 
 
 # ======================================================
@@ -57,12 +60,12 @@ class Net(nn.Module):
     def __init__(self, input_size):
         super(Net, self).__init__()
 
-        self.fc1 = nn.Linear(input_size, 620)
-        self.fc2 = nn.Linear(620, 620)
-        self.fc_final = nn.Linear(620, NUM_CLASSES)
+        self.fc1 = nn.Linear(input_size, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc_final = nn.Linear(256, NUM_CLASSES)
 
         self.activation = F.relu
-        self.dropout = nn.Dropout(p=0.65)
+        self.dropout = nn.Dropout(p=0.7)
 
     def forward(self, x):
         x = self.dropout(self.activation(self.fc1(x)))
@@ -76,38 +79,38 @@ class Net(nn.Module):
 # --- FUNCTIONS ----------------------------------------
 # ======================================================
 # normalizations functions
-def norm_standardize(array):
-    return array.sub(array.mean()).div(array.std())
+def norm_standardize(tensor_1d):
+    return tensor_1d.sub(tensor_1d.mean()).div(tensor_1d.std())
 
-def norm_l2(array):
-    return array.div(array.norm(p=2))
+def norm_l2(tensor_1d):
+    return tensor_1d.div(tensor_1d.norm(p=2))
 
-def coords_450(reader):
-    coords = [float(coord) for coords in reader for coord in coords]
-    # add/remove coords if length is not valid
-    length = len(coords)
-    if length != 450:
-        error = 450 - length
-        # remove lines if negative, otherwise add extra lines with zeros
-        if error > 0:
-            coords.extend([0 for amt in range(error)])
-        else:
-            coords = coords[:error]
-    # normalize coords
-    coords = norm_l2(torch.tensor(coords, dtype=torch.float, device=CUDA_0))
+def get_coords_from_file(file):
+    reader = csv.reader(file)
 
-    return coords
+    # store coords by column
+    coord_cols = [[] for _ in range(3)]
+    for coord_row in reader:
+        for i, coord in enumerate(coord_row):
+            coord_cols[i].append(float(coord))
 
-# def coords_3(reader):
-#     coords = [[] for i in range(3)]
-#     for coords_row in reader:
-#         for i, coord in enumerate(coords_row):
-#             coords[i].append(float(coord))
-#     coords = torch.tensor(coords, dtype=torch.float)
-#     # get the mean of every coords column
-#     coords = torch.mean(coords, dim=1)
-#     coords.div_(coords.norm(p=2))
-#     return coords
+    # add/remove coords if column length is not 150
+    col_len = len(coord_cols[0])
+    error_len = COLUMN_LEN - col_len
+    # add elements if positive, otherwise remove
+    for i, coord_col in enumerate(coord_cols):
+        if error_len > 0:
+            # calculate mean of this column
+            mean = sum(coord_col) / len(coord_col)
+            # append the calculated mean for error_len times
+            coord_col.extend([mean for i in range(error_len)])
+        elif error_len < 0:
+            del coord_col[(col_len + error_len):]
+        # convert to torch tensor
+        coord_cols[i] = norm_standardize(torch.tensor(coord_col, dtype=torch.float, device=CUDA_0))
+
+    # convert cols to tensor, concat and return it
+    return torch.cat(coord_cols)
 
 def load_inputs(path, testing=False):
     inputs = []
@@ -118,9 +121,8 @@ def load_inputs(path, testing=False):
 
     for filename in os.listdir(path):
         with open(os.path.join(path, filename), mode='r') as feature_file:
-            reader = csv.reader(feature_file)
             # get coords
-            coords = coords_450(reader)
+            coords = get_coords_from_file(feature_file)
         # associate idx to name if testing
         if testing:
             idx_to_name[len(inputs)] = filename.split('.')[0]  # without the extension
@@ -142,6 +144,7 @@ if __name__ == "__main__":
     with open(TRAIN_LABELS_FILE, mode='r') as labels_file:
         csv_reader = csv.reader(labels_file)
         next(csv_reader)  # skip the header
+        # substract 1 because classes start from 0
         labels = torch.tensor([int(label) - 1 for _, label in csv_reader], dtype=torch.long, device=CUDA_0)
 
     # put the loaded data into a dataset
@@ -172,7 +175,17 @@ if __name__ == "__main__":
 
     # criterion and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+
+    # show model structure, parameters, loss function, etc.
+    print("Learning Rate: ", LEARNING_RATE)
+    print("Weight Decay: ", WEIGHT_DECAY)
+    print("Batch Size: ", BATCH_SIZE)
+    print("Activation: ", model.activation)
+    print("Epochs: ", NUM_EPOCHS)
+    print("Criterion: ", criterion)
+    print("Optimizer: ", optimizer)
+    print("Model Structure:\n", model)
 
     # save the model when minimum loss is found
     validation_loss_min = np.Inf
@@ -190,9 +203,9 @@ if __name__ == "__main__":
             predictions = model.forward(inputs)
             # calculate loss
             loss = criterion(predictions, labels)
-            # perform backprop
+            # perform backprop, compute gradients
             loss.backward()
-            # update weights
+            # update weights by applying gradients
             optimizer.step()
 
             train_loss += loss.item()
@@ -236,10 +249,3 @@ if __name__ == "__main__":
             }, MODEL_SAVE_PATH)
 
     print(f"--- Training completed. Minimum loss: {validation_loss_min:.3f} ---")
-    # show model structure, parameters, loss function, etc.
-    print("Learning Rate: ", LEARNING_RATE)
-    print("Batch Size: ", BATCH_SIZE)
-    print("Epochs: ", NUM_EPOCHS)
-    print("Criterion: ", criterion)
-    print("Optimizer: ", optimizer)
-    print("Model Structure:\n", model)

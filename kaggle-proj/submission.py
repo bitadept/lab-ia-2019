@@ -9,7 +9,7 @@ WORKING_DIR = os.getcwd()
 DATA_DIR = os.path.join(WORKING_DIR, "data")
 TEST_DATA_DIR = os.path.join(DATA_DIR, "test")
 MODELS_PATH = "S:\\models"
-MODEL_FILE = "model669_tloss342.pt"
+MODEL_FILE = "model515_tloss209.pt"
 
 inputs, idx_to_name = load_inputs(TEST_DATA_DIR, testing=True)
 
