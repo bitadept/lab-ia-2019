@@ -3,17 +3,18 @@ import os
 import torch
 
 from train import load_inputs
-from train import Net
+from train2 import Net
 
 WORKING_DIR = os.getcwd()
 DATA_DIR = os.path.join(WORKING_DIR, "data")
 TEST_DATA_DIR = os.path.join(DATA_DIR, "test")
 MODELS_PATH = "S:\\models"
-MODEL_FILE = "model515_tloss209.pt"
+MODEL_FILE = "model285_tloss214.pt"
 
 inputs, idx_to_name = load_inputs(TEST_DATA_DIR, testing=True)
 
-model = Net(len(inputs[0])).cuda()
+# model = Net(len(inputs[0])).cuda()
+model = Net(3, 20).cuda()
 
 checkpoint = torch.load(os.path.join(MODELS_PATH, MODEL_FILE))
 
@@ -28,7 +29,7 @@ with torch.no_grad():
 
         input = input.cuda()
 
-        prediction = model.forward(input)
+        prediction = model.forward(input.view(1, 3, -1))
 
         _, top_class = prediction.topk(1)
 

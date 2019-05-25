@@ -1,3 +1,5 @@
+# Conv1d implementation inspired from https://www.kaggle.com/purplejester/pytorch-deep-time-series-classification
+
 # ======================================================
 # --- LIBRARIES ----------------------------------------
 # ======================================================
@@ -7,7 +9,6 @@ from random import shuffle
 import numpy as np
 # pytorch
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
@@ -30,9 +31,9 @@ VALID_PCT = 0.20
 COLUMN_LEN = 150
 ROW_LEN = 3
 # network hyperparams
-LEARNING_RATE = 0.0005
+LEARNING_RATE = 0.001
 WEIGHT_DECAY = 0.0000
-BATCH_SIZE = 25
+BATCH_SIZE = 64
 NUM_EPOCHS = 10000
 
 
@@ -55,62 +56,84 @@ class UserCoordsDataset(Dataset):
         return len(self.labels)
 
 
-# Networks
+# Network
+class _SepConv1d(nn.Module):
+    """
+    Separable 1d convolution
+    """
+
+    def __init__(self, in_channels, out_channels, kernel, stride, pad):
+        super().__init__()
+        self.depthwise = nn.Conv1d(in_channels, in_channels, kernel, stride, padding=pad, groups=in_channels)
+        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        return self.pointwise(self.depthwise(x))
+
+
+class SepConv1d(nn.Module):
+    """
+    The adds optional activation function and dropout layers right after
+    a separable convolution layer
+    """
+
+    def __init__(self, in_channels, out_channels, kernel, stride, pad, drop=None, bn=True,
+                 activation=lambda: nn.PReLU()):
+
+        super().__init__()
+        assert drop is None or (0.0 < drop < 1.0)
+        layers = [_SepConv1d(in_channels, out_channels, kernel, stride, pad)]
+        if activation:
+            layers.append(activation())
+        if bn:
+            layers.append(nn.BatchNorm1d(out_channels))
+        if drop is not None:
+            layers.append(nn.Dropout(drop))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.layers(x)
+
+
+class Flatten(nn.Module):
+    """
+    Flattens tensors
+    """
+
+    def __init__(self, keep_batch_dim=True):
+        super().__init__()
+        self.keep_batch_dim = keep_batch_dim
+
+    def forward(self, x):
+        if self.keep_batch_dim:
+            return x.view(x.size(0), -1)
+        return x.view(-1)
+
+
 class Net(nn.Module):
-    def __init__(self, input_size):
-        super(Net, self).__init__()
 
-        self.fc1 = nn.Linear(input_size, 512)
-        self.fc2 = nn.Linear(512, 512)
-        self.fc_final = nn.Linear(512, NUM_CLASSES)
+    def __init__(self, in_channels, num_classes, drop=.5):
+        super().__init__()
 
-        self.activation = F.relu
-        self.dropout1 = nn.Dropout(p=0.8)
-        self.dropout2 = nn.Dropout(p=0.9)
+        self.out = nn.Sequential(
 
-    def forward(self, x):
-        x = self.dropout1(self.activation(self.fc1(x)))
-        x = self.dropout2(self.activation(self.fc2(x)))
-        x = self.fc_final(x)
+            SepConv1d(in_channels, 32, 8, 2, 3, drop=drop),
+            SepConv1d(32, 64, 8, 4, 2, drop=drop),
+            SepConv1d(64, 128, 8, 4, 2, drop=drop),
+            SepConv1d(128, 256, 8, 4, 2),
+            Flatten(),
+            nn.Dropout(drop),
+            nn.Linear(256, 64),
+            nn.PReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(drop),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes)
+        )
 
-        return x
-
-
-class NetCNN(nn.Module):
-    def __init__(self):
-        super(NetCNN, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=3, out_channels=64, kernel_size=2, stride=1)
-        self.conv2 = nn.Conv1d(in_channels=64, out_channels=64, kernel_size=2, stride=1)
-        self.conv3 = nn.Conv1d(in_channels=64, out_channels=128, kernel_size=2, stride=1)
-        self.conv4 = nn.Conv1d(in_channels=128, out_channels=128, kernel_size=2, stride=1)
-        self.conv5 = nn.Conv1d(in_channels=128, out_channels=256, kernel_size=2, stride=1)
-        self.conv6 = nn.Conv1d(in_channels=256, out_channels=256, kernel_size=2, stride=1)
-
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-
-        self.fc1 = nn.Linear(4352, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc_final = nn.Linear(64, NUM_CLASSES)
-
-        self.activation = F.relu
-        self.dropout = nn.Dropout(p=0.12)
-
-    def forward(self, x):
-        # add sequence of convolutional and max pooling layers
-        x = self.dropout(self.activation(self.conv1(x)))
-        x = self.dropout(self.pool(self.activation(self.conv2(x))))
-        x = self.dropout(self.activation(self.conv3(x)))
-        x = self.dropout(self.pool(self.activation(self.conv4(x))))
-        x = self.dropout(self.activation(self.conv5(x)))
-        x = self.dropout(self.pool(self.activation(self.conv6(x))))
-
-        # print(x.shape)
-        x = x.view(x.shape[0], 4352)
-        x = self.dropout(self.activation(self.fc1(x)))
-        x = self.dropout(self.activation(self.fc2(x)))
-        x = self.dropout(self.fc_final(x))
-
-        return x
+    def forward(self, inputs):
+        return self.out(inputs)
 
 
 # ======================================================
@@ -213,20 +236,17 @@ if __name__ == "__main__":
     # ======================================================
 
     # init network
-    # model = Net(len(inputs[0])).cuda()
-    model = NetCNN().cuda()
+    model = Net(ROW_LEN, NUM_CLASSES, drop=0.22).cuda()
     # model.load_state_dict(torch.load(MODEL_SAVE_PATH)['model_state_dict'])
 
     # criterion and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    # optimizer = optim.SGD(model.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.out.parameters(), lr=LEARNING_RATE)
 
     # show model structure, parameters, loss function, etc.
     print("Learning Rate: ", LEARNING_RATE)
     print("Weight Decay: ", WEIGHT_DECAY)
     print("Batch Size: ", BATCH_SIZE)
-    print("Activation: ", model.activation)
     print("Epochs: ", NUM_EPOCHS)
     print("Criterion: ", criterion)
     print("Optimizer: ", optimizer)
